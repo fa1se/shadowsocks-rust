@@ -413,6 +413,26 @@ impl Server {
                         server_builder.set_launchd_udp_socket_name(n);
                     }
 
+                    #[cfg(feature = "local-fake-dns")]
+                    if let Some(true) = local_config.prefer_fake_dns {
+                        let mut fake_dns_builder = FakeDnsBuilder::new_embeded();
+                        if let Some(n) = local_config.fake_dns_ipv4_network {
+                            fake_dns_builder.set_ipv4_network(n);
+                        }
+                        if let Some(n) = local_config.fake_dns_ipv6_network {
+                            fake_dns_builder.set_ipv6_network(n);
+                        }
+                        if let Some(exp) = local_config.fake_dns_record_expire_duration {
+                            fake_dns_builder.set_expire_duration(exp);
+                        }
+                        if let Some(p) = local_config.fake_dns_database_path {
+                            fake_dns_builder.set_database_path(p);
+                        }
+                        let server = fake_dns_builder.build().await?;
+                        context.add_fake_dns_manager(server.clone_manager()).await;
+                        server_builder.set_fake_dns_manager(server.clone_manager());
+                    }
+
                     let server = server_builder.build().await?;
                     local_server.dns_servers.push(server);
                 }

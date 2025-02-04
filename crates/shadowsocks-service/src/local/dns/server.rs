@@ -48,6 +48,9 @@ use crate::{
 
 use super::{client_cache::DnsClientCache, config::NameServerAddr};
 
+#[cfg(feature = "local-fake-dns")]
+use crate::local::fake_dns::{manager::FakeDnsManager, processor::handle_dns_request as handle_fake_dns_requests};
+
 /// DNS Relay server builder
 pub struct DnsBuilder {
     context: Arc<ServiceContext>,
@@ -61,6 +64,8 @@ pub struct DnsBuilder {
     launchd_tcp_socket_name: Option<String>,
     #[cfg(target_os = "macos")]
     launchd_udp_socket_name: Option<String>,
+    #[cfg(feature = "local-fake-dns")]
+    fake_dns_manager: Option<Arc<FakeDnsManager>>,
 }
 
 impl DnsBuilder {
@@ -104,6 +109,8 @@ impl DnsBuilder {
             launchd_tcp_socket_name: None,
             #[cfg(target_os = "macos")]
             launchd_udp_socket_name: None,
+            #[cfg(feature = "local-fake-dns")]
+            fake_dns_manager: None,
         }
     }
 
@@ -124,6 +131,11 @@ impl DnsBuilder {
         self.launchd_udp_socket_name = Some(n);
     }
 
+    #[cfg(feature = "local-fake-dns")]
+    pub fn set_fake_dns_manager(&mut self, m: Arc<FakeDnsManager>) {
+        self.fake_dns_manager = Some(m);
+    }
+
     /// Build DNS server
     pub async fn build(self) -> io::Result<Dns> {
         let client = Arc::new(DnsClient::new(
@@ -131,6 +143,8 @@ impl DnsBuilder {
             self.balancer,
             self.mode,
             self.client_cache_size,
+            #[cfg(feature = "local-fake-dns")]
+            self.fake_dns_manager,
         ));
 
         let local_addr = Arc::new(self.local_addr);
@@ -710,16 +724,26 @@ struct DnsClient {
     mode: Mode,
     balancer: PingBalancer,
     attempts: usize,
+    #[cfg(feature = "local-fake-dns")]
+    fake_dns_manager: Option<Arc<FakeDnsManager>>,
 }
 
 impl DnsClient {
-    fn new(context: Arc<ServiceContext>, balancer: PingBalancer, mode: Mode, client_cache_size: usize) -> DnsClient {
+    fn new(
+        context: Arc<ServiceContext>,
+        balancer: PingBalancer,
+        mode: Mode,
+        client_cache_size: usize,
+        #[cfg(feature = "local-fake-dns")] fake_dns_manager: Option<Arc<FakeDnsManager>>,
+    ) -> DnsClient {
         DnsClient {
             context,
             client_cache: DnsClientCache::new(client_cache_size),
             mode,
             balancer,
             attempts: 2,
+            #[cfg(feature = "local-fake-dns")]
+            fake_dns_manager,
         }
     }
 
@@ -747,7 +771,7 @@ impl DnsClient {
         } else if request.query_count() > 0 {
             // Make queries according to ACL rules
 
-            let (r, forward) = self.acl_lookup(&request.queries()[0], local_addr, remote_addr).await;
+            let (r, forward) = self.acl_lookup(&request, local_addr, remote_addr).await;
             if let Ok(result) = r {
                 for rec in result.answers() {
                     trace!("dns answer: {:?}", rec);
@@ -776,15 +800,28 @@ impl DnsClient {
 
     async fn acl_lookup(
         &self,
-        query: &Query,
+        req_message: &Message,
         local_addr: &NameServerAddr,
         remote_addr: &Address,
     ) -> (io::Result<Message>, bool) {
+        let query = &req_message.queries()[0];
+
         // Start querying name servers
         debug!("DNS lookup {:?} {}", query.query_type(), query.name());
 
         match should_forward_by_query(&self.context, &self.balancer, query) {
             Some(true) => {
+                #[cfg(feature = "local-fake-dns")]
+                if let Some(fake_dns_manager) = &self.fake_dns_manager {
+                    match query.query_type() {
+                        RecordType::A | RecordType::AAAA => {
+                            let fake_dns_response = handle_fake_dns_requests(req_message, fake_dns_manager).await;
+                            trace!("pick fakedns response (query): {:?}", fake_dns_response);
+                            return (fake_dns_response, true);
+                        }
+                        _ => (),
+                    }
+                }
                 let remote_response = self.lookup_remote(query, remote_addr).await;
                 trace!("pick remote response (query): {:?}", remote_response);
                 return (remote_response, true);

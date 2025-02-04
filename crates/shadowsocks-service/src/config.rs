@@ -339,6 +339,10 @@ struct SSLocalExtConfig {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     acl: Option<String>,
+
+    #[cfg(all(feature = "local-dns", feature = "local-fake-dns"))]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prefer_fake_dns: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -1043,6 +1047,9 @@ pub struct LocalConfig {
     /// Fake DNS storage database path
     #[cfg(feature = "local-fake-dns")]
     pub fake_dns_database_path: Option<PathBuf>,
+
+    #[cfg(all(feature = "local-dns", feature = "local-fake-dns"))]
+    pub prefer_fake_dns: Option<bool>,
 }
 
 impl LocalConfig {
@@ -1109,6 +1116,9 @@ impl LocalConfig {
             fake_dns_ipv6_network: None,
             #[cfg(feature = "local-fake-dns")]
             fake_dns_database_path: None,
+
+            #[cfg(all(feature = "local-dns", feature = "local-fake-dns"))]
+            prefer_fake_dns: None,
         }
     }
 
@@ -1845,6 +1855,11 @@ impl Config {
                             }
                             if let Some(p) = local.fake_dns_database_path {
                                 local_config.fake_dns_database_path = Some(p.into());
+                            }
+
+                            #[cfg(feature = "local-dns")]
+                            if let Some(p) = local.prefer_fake_dns {
+                                local_config.prefer_fake_dns = Some(p);
                             }
                         }
 
@@ -2943,6 +2958,9 @@ impl fmt::Display for Config {
                             .acl
                             .as_ref()
                             .and_then(|a| a.file_path().to_str().map(ToOwned::to_owned)),
+
+                        #[cfg(all(feature = "local-dns", feature = "local-fake-dns"))]
+                        prefer_fake_dns: local.prefer_fake_dns,
                     };
                     jlocals.push(jlocal);
                 }

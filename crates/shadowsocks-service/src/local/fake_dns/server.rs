@@ -19,8 +19,8 @@ use super::{manager::FakeDnsManager, tcp_server::FakeDnsTcpServer, udp_server::F
 /// Fake DNS builder
 pub struct FakeDnsBuilder {
     context: Arc<ServiceContext>,
-    mode: Mode,
-    client_addr: ServerAddr,
+    mode: Option<Mode>,
+    client_addr: Option<ServerAddr>,
     database_path: PathBuf,
     ipv4_network: Ipv4Net,
     ipv6_network: Ipv6Net,
@@ -34,12 +34,24 @@ impl FakeDnsBuilder {
         FakeDnsBuilder::with_context(Arc::new(context), client_addr)
     }
 
+    pub fn new_embeded() -> FakeDnsBuilder {
+        FakeDnsBuilder {
+            context: Arc::new(ServiceContext::new()),
+            mode: None,
+            client_addr: None,
+            database_path: "shadowsocks-fakedns.sled".into(),
+            ipv4_network: Ipv4Net::new(Ipv4Addr::new(172, 16, 0, 0), 12).unwrap(),
+            ipv6_network: Ipv6Net::new(Ipv6Addr::new(0xfc00, 0, 0, 0, 0, 0, 0, 0), 7).unwrap(),
+            expire_duration: Duration::from_secs(10),
+        }
+    }
+
     /// Create a new Fake DNS server with context
     pub fn with_context(context: Arc<ServiceContext>, client_addr: ServerAddr) -> FakeDnsBuilder {
         FakeDnsBuilder {
             context,
-            mode: Mode::TcpAndUdp,
-            client_addr,
+            mode: Some(Mode::TcpAndUdp),
+            client_addr: Some(client_addr),
             database_path: "shadowsocks-fakedns.sled".into(),
             ipv4_network: Ipv4Net::new(Ipv4Addr::new(172, 16, 0, 0), 12).unwrap(),
             ipv6_network: Ipv6Net::new(Ipv6Addr::new(0xfc00, 0, 0, 0, 0, 0, 0, 0), 7).unwrap(),
@@ -78,15 +90,17 @@ impl FakeDnsBuilder {
         let manager = Arc::new(manager);
 
         let mut tcp_server = None;
-        if self.mode.enable_tcp() {
-            let server = FakeDnsTcpServer::new(self.context.clone(), &self.client_addr, manager.clone()).await?;
-            tcp_server = Some(server);
-        }
-
         let mut udp_server = None;
-        if self.mode.enable_udp() {
-            let server = FakeDnsUdpServer::new(self.context.clone(), &self.client_addr, manager.clone()).await?;
-            udp_server = Some(server);
+        if let Some(client_addr) = self.client_addr {
+            if self.mode.map_or(false, |m| m.enable_tcp()) {
+                let server = FakeDnsTcpServer::new(self.context.clone(), &client_addr, manager.clone()).await?;
+                tcp_server = Some(server);
+            }
+
+            if self.mode.map_or(false, |m| m.enable_udp()) {
+                let server = FakeDnsUdpServer::new(self.context.clone(), &client_addr, manager.clone()).await?;
+                udp_server = Some(server);
+            }
         }
 
         Ok(FakeDns {

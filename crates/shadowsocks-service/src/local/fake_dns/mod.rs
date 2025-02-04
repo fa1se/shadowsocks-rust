@@ -9,7 +9,7 @@
 pub use self::server::{FakeDns, FakeDnsBuilder};
 
 pub mod manager;
-mod processor;
+pub mod processor;
 mod proto;
 pub mod server;
 mod tcp_server;
