@@ -209,7 +209,11 @@ impl ServiceContext {
 
         for mgr in self.fake_dns_manager.read().await.iter() {
             if let Ok(Some(name)) = mgr.map_ip_domain(ip_addr).await {
-                let new_addr = Address::DomainNameAddress(name.to_string(), socket_addr.port());
+                let mut name = name.to_string();
+                if name.chars().last() == Some('.') {
+                    name.truncate(name.len() - 1)
+                }
+                let new_addr = Address::DomainNameAddress(name, socket_addr.port());
                 log::trace!("fakedns mapped {} -> {}", addr, new_addr);
                 return Some(new_addr);
             }
